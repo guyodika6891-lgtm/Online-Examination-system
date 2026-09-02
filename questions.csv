@@ -1,0 +1,9 @@
+Question,Option A,Option B,Option C,Option D,Correct Answer
+Which Errors are occur when the code violates the rules of the programming language?,Syntax error,Runtime error,Logical error,Semantic error,A
+Which one is the building blocks of programs,Variables,Data types,Operators,Controll structure,E
+_____ are reserved words in Python that have a specific meaning and cannot be used as variable names.,Functions,Keynames,Variables,Keywords,D
+Which function is used to take input from a user?,print(),Scan(),read(),Input(),D
+Which symbol is used for comments in Python?,#,/* */,//,--,A
+From the following which is NOT a data type in Python?,char,float,int,Bool,A
+What will int("ten") return?,ten,1,Error,"ten",C
+_________ is a named location in memory that stores a value.,Variable,Data,String,All,A

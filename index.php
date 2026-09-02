@@ -1,0 +1,853 @@
+<?php
+require_once 'config/database.php';
+require_once 'config/multi_role.php';
+
+// Check if user is already logged in
+if(isset($_SESSION['user_id'])) {
+    $current_role = getCurrentRole();
+    $redirect_map = [
+        'admin' => 'admin/dashboard.php',
+        'exam_committee' => 'exam_committee/dashboard.php',
+        'teacher' => 'teacher/dashboard.php',
+        'student' => 'student/dashboard.php'
+    ];
+    header("Location: " . ($redirect_map[$current_role] ?? 'student/dashboard.php'));
+    exit();
+}
+
+$error = '';
+$success = '';
+
+// Handle login
+if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
+    $username = trim($_POST['username']);
+    $password = $_POST['password'];
+    
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE (username = ? OR email = ?) AND status = 'active'");
+    $stmt->execute([$username, $username]);
+    $user = $stmt->fetch();
+    
+    if($user && password_verify($password, $user['password'])) {
+        $_SESSION['user_id'] = $user['id'];
+        $_SESSION['username'] = $user['username'];
+        $_SESSION['full_name'] = $user['full_name'];
+        
+        $user_roles = getUserRoles($pdo, $user['id']);
+        $roles = array_column($user_roles, 'role');
+        $_SESSION['roles'] = $roles;
+        
+        $primary_role = getPrimaryRole($pdo, $user['id']);
+        $_SESSION['primary_role'] = $primary_role;
+        $_SESSION['current_role'] = $primary_role;
+        
+        $update = $pdo->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
+        $update->execute([$user['id']]);
+        
+        logActivity($pdo, $user['id'], 'login', "User logged in with roles: " . implode(', ', $roles));
+        
+        $redirect_map = [
+            'admin' => 'admin/dashboard.php',
+            'exam_committee' => 'exam_committee/dashboard.php',
+            'teacher' => 'teacher/dashboard.php',
+            'student' => 'student/dashboard.php'
+        ];
+        
+        header("Location: " . ($redirect_map[$primary_role] ?? 'student/dashboard.php'));
+        exit();
+    } else {
+        $error = "Invalid credentials or account inactive!";
+    }
+}
+
+// Handle registration
+if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
+    $username = trim($_POST['username']);
+    $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
+    $full_name = trim($_POST['full_name']);
+    $email = trim($_POST['email']);
+    $student_id = trim($_POST['student_id']);
+    
+    if (!preg_match("/^[a-zA-Z\s]+$/", $full_name)) {
+        $error = "Full name can only contain letters and spaces!";
+    } elseif (strlen($full_name) < 3) {
+        $error = "Full name must be at least 3 characters!";
+    } else {
+        $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ? OR email = ?");
+        $stmt->execute([$username, $email]);
+        
+        if($stmt->rowCount() > 0) {
+            $error = "Username or email already exists!";
+        } else {
+            $stmt = $pdo->prepare("
+                INSERT INTO users (username, password, full_name, email, student_id, role, status) 
+                VALUES (?, ?, ?, ?, ?, 'student', 'active')
+            ");
+            
+            if($stmt->execute([$username, $password, $full_name, $email, $student_id])) {
+                $user_id = $pdo->lastInsertId();
+                assignRole($pdo, $user_id, 'student', $user_id);
+                $success = "Registration successful! You can now login.";
+                $_POST = array();
+            } else {
+                $error = "Registration failed. Please try again.";
+            }
+        }
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Online Examination System | Secure Login</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0f0c29;
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+            min-height: 100vh;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Animated Particles Background */
+        .particles {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            overflow: hidden;
+        }
+
+        .particle {
+            position: absolute;
+            background: rgba(255,255,255,0.08);
+            border-radius: 50%;
+            animation: float 15s infinite ease-in-out;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0.3; }
+            25% { transform: translateY(-50px) translateX(30px) rotate(90deg); opacity: 0.6; }
+            50% { transform: translateY(-100px) translateX(-20px) rotate(180deg); opacity: 0.3; }
+            75% { transform: translateY(-50px) translateX(-40px) rotate(270deg); opacity: 0.6; }
+        }
+
+        /* Gradient Orbs */
+        .orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(80px);
+            z-index: 0;
+        }
+
+        .orb-1 {
+            width: 400px;
+            height: 400px;
+            background: rgba(102,126,234,0.3);
+            top: -100px;
+            left: -100px;
+            animation: orbMove 20s infinite;
+        }
+
+        .orb-2 {
+            width: 500px;
+            height: 500px;
+            background: rgba(118,75,162,0.3);
+            bottom: -150px;
+            right: -150px;
+            animation: orbMove 25s infinite reverse;
+        }
+
+        .orb-3 {
+            width: 300px;
+            height: 300px;
+            background: rgba(236,72,153,0.2);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            animation: orbMove 30s infinite;
+        }
+
+        @keyframes orbMove {
+            0%, 100% { transform: translate(0, 0); }
+            25% { transform: translate(50px, 50px); }
+            50% { transform: translate(0, 100px); }
+            75% { transform: translate(-50px, 50px); }
+        }
+
+        /* Main Container */
+        .container {
+            position: relative;
+            z-index: 1;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        /* Glass Card */
+        .glass-card {
+            background: rgba(255,255,255,0.03);
+            backdrop-filter: blur(20px);
+            border-radius: 32px;
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+            overflow: hidden;
+            width: 100%;
+            max-width: 480px;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .glass-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 35px 60px -15px rgba(0,0,0,0.6);
+        }
+
+        /* Header Section */
+        .card-header {
+            background: linear-gradient(135deg, rgba(102,126,234,0.2) 0%, rgba(118,75,162,0.2) 100%);
+            padding: 40px 30px;
+            text-align: center;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 40px;
+            animation: logoGlow 2s infinite;
+        }
+
+        @keyframes logoGlow {
+            0%, 100% { box-shadow: 0 0 20px rgba(102,126,234,0.3); }
+            50% { box-shadow: 0 0 40px rgba(102,126,234,0.6); }
+        }
+
+        .card-header h1 {
+            color: white;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            margin-bottom: 8px;
+        }
+
+        .card-header p {
+            color: rgba(255,255,255,0.7);
+            font-size: 14px;
+        }
+
+        /* Body Section */
+        .card-body {
+            padding: 35px;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 30px;
+            background: rgba(255,255,255,0.05);
+            padding: 5px;
+            border-radius: 60px;
+        }
+
+        .tab-btn {
+            flex: 1;
+            background: transparent;
+            border: none;
+            padding: 12px 20px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            border-radius: 50px;
+            transition: all 0.3s ease;
+            color: rgba(255,255,255,0.6);
+            font-family: 'Inter', sans-serif;
+        }
+
+        .tab-btn.active {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            box-shadow: 0 5px 15px rgba(102,126,234,0.4);
+        }
+
+        .tab-btn:hover:not(.active) {
+            background: rgba(255,255,255,0.1);
+            color: white;
+        }
+
+        /* Tab Content */
+        .tab-content {
+            display: none;
+            animation: fadeInUp 0.4s ease;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Form Groups */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: rgba(255,255,255,0.8);
+            font-size: 13px;
+            letter-spacing: 0.3px;
+        }
+
+        .input-wrapper {
+            position: relative;
+        }
+
+        .input-icon {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: rgba(255,255,255,0.5);
+            font-size: 16px;
+        }
+
+        .input-wrapper input {
+            width: 100%;
+            padding: 14px 16px 14px 48px;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 14px;
+            font-size: 14px;
+            color: white;
+            font-family: 'Inter', sans-serif;
+            transition: all 0.3s ease;
+        }
+
+        .input-wrapper input:focus {
+            outline: none;
+            border-color: #667eea;
+            background: rgba(255,255,255,0.12);
+            box-shadow: 0 0 0 3px rgba(102,126,234,0.2);
+        }
+
+        .input-wrapper input::placeholder {
+            color: rgba(255,255,255,0.4);
+        }
+
+        .input-wrapper input.error {
+            border-color: #f56565;
+        }
+
+        .input-wrapper input.success {
+            border-color: #48bb78;
+        }
+
+        /* Validation Messages */
+        .validation-message {
+            font-size: 11px;
+            margin-top: 6px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .validation-message.error {
+            color: #f56565;
+        }
+
+        .validation-message.success {
+            color: #48bb78;
+        }
+
+        /* Password Toggle */
+        .password-toggle {
+            position: absolute;
+            right: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            color: rgba(255,255,255,0.5);
+            font-size: 16px;
+            transition: color 0.3s;
+        }
+
+        .password-toggle:hover {
+            color: rgba(255,255,255,0.8);
+        }
+
+        /* Button */
+        .btn-submit {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 14px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+            font-family: 'Inter', sans-serif;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-submit::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s;
+        }
+
+        .btn-submit:hover::before {
+            left: 100%;
+        }
+
+        .btn-submit:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102,126,234,0.4);
+        }
+
+        /* Alerts */
+        .alert {
+            padding: 14px 16px;
+            border-radius: 14px;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .alert-error {
+            background: rgba(245,101,101,0.15);
+            border-left: 3px solid #f56565;
+            color: #fca5a5;
+        }
+
+        .alert-success {
+            background: rgba(72,187,120,0.15);
+            border-left: 3px solid #48bb78;
+            color: #9ae6b4;
+        }
+
+        /* Footer */
+        .card-footer {
+            padding: 20px 35px 35px;
+            text-align: center;
+            border-top: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .security-badge {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            font-size: 11px;
+            color: rgba(255,255,255,0.5);
+        }
+
+        .security-badge i {
+            font-size: 12px;
+        }
+
+        .copyright {
+            font-size: 10px;
+            color: rgba(255,255,255,0.3);
+            margin-top: 15px;
+        }
+
+        /* Responsive */
+        @media (max-width: 500px) {
+            .card-body, .card-footer {
+                padding: 25px;
+            }
+            
+            .card-header {
+                padding: 30px 25px;
+            }
+            
+            .card-header h1 {
+                font-size: 24px;
+            }
+            
+            .tabs {
+                gap: 8px;
+            }
+            
+            .tab-btn {
+                padding: 10px 15px;
+                font-size: 13px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Animated Particles -->
+    <div class="particles">
+        <div class="particle" style="width: 100px; height: 100px; top: 10%; left: 5%; animation-duration: 12s;"></div>
+        <div class="particle" style="width: 150px; height: 150px; bottom: 15%; right: 8%; animation-duration: 18s;"></div>
+        <div class="particle" style="width: 70px; height: 70px; top: 40%; left: 80%; animation-duration: 14s;"></div>
+        <div class="particle" style="width: 120px; height: 120px; bottom: 30%; left: 10%; animation-duration: 22s;"></div>
+        <div class="particle" style="width: 60px; height: 60px; top: 70%; right: 20%; animation-duration: 10s;"></div>
+    </div>
+    
+    <!-- Gradient Orbs -->
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+
+    <div class="container">
+        <div class="glass-card">
+            <div class="card-header">
+                <div class="logo">
+                    <i class="fas fa-graduation-cap"></i>
+                </div>
+                <h1>ExamSphere</h1>
+                <p>Next-Generation Online Examination Platform</p>
+            </div>
+            
+            <div class="card-body">
+                <!-- Tabs -->
+                <div class="tabs">
+                    <button class="tab-btn active" onclick="switchTab('login')">
+                        <i class="fas fa-key"></i> Sign In
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('register')">
+                        <i class="fas fa-user-plus"></i> Create Account
+                    </button>
+                </div>
+                
+                <!-- Messages -->
+                <?php if($error): ?>
+                    <div class="alert alert-error">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <?php echo $error; ?>
+                    </div>
+                <?php endif; ?>
+                
+                <?php if($success): ?>
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle"></i>
+                        <?php echo $success; ?>
+                    </div>
+                <?php endif; ?>
+                
+                <!-- Login Tab -->
+                <div id="login-tab" class="tab-content active">
+                    <form method="POST" onsubmit="return validateLogin()">
+                        <div class="form-group">
+                            <label><i class="fas fa-user"></i> Username or Email</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon"><i class="fas fa-envelope"></i></span>
+                                <input type="text" name="username" id="login_username" required placeholder="Enter your username or email">
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label><i class="fas fa-lock"></i> Password</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon"><i class="fas fa-key"></i></span>
+                                <input type="password" name="password" id="login_password" required placeholder="Enter your password">
+                                <span class="password-toggle" onclick="togglePassword('login_password', this)">
+                                    <i class="far fa-eye"></i>
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <button type="submit" name="login" class="btn-submit">
+                            <i class="fas fa-arrow-right"></i> Sign In
+                        </button>
+                    </form>
+                </div>
+                
+                <!-- Register Tab -->
+                <div id="register-tab" class="tab-content">
+                    <form method="POST" onsubmit="return validateRegistration()">
+                        <div class="form-group">
+                            <label><i class="fas fa-user-circle"></i> Full Name</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon"><i class="fas fa-signature"></i></span>
+                                <input type="text" name="full_name" id="reg_full_name" required 
+                                       placeholder="Enter your full name"
+                                       onkeyup="validateNameLive()">
+                            </div>
+                            <div class="validation-message" id="name_validation"></div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label><i class="fas fa-at"></i> Username</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon"><i class="fas fa-user"></i></span>
+                                <input type="text" name="username" id="reg_username" required 
+                                       placeholder="Choose a username">
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label><i class="fas fa-envelope"></i> Email Address</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon"><i class="fas fa-envelope"></i></span>
+                                <input type="email" name="email" id="reg_email" required 
+                                       placeholder="Enter your email">
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label><i class="fas fa-id-card"></i> Student ID (Optional)</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon"><i class="fas fa-qrcode"></i></span>
+                                <input type="text" name="student_id" placeholder="Enter your student ID">
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label><i class="fas fa-lock"></i> Password</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon"><i class="fas fa-key"></i></span>
+                                <input type="password" name="password" id="reg_password" required 
+                                       placeholder="Create a password (min 6 characters)">
+                                <span class="password-toggle" onclick="togglePassword('reg_password', this)">
+                                    <i class="far fa-eye"></i>
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label><i class="fas fa-check-circle"></i> Confirm Password</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon"><i class="fas fa-shield-alt"></i></span>
+                                <input type="password" name="confirm_password" id="reg_confirm_password" required 
+                                       placeholder="Confirm your password">
+                                <span class="password-toggle" onclick="togglePassword('reg_confirm_password', this)">
+                                    <i class="far fa-eye"></i>
+                                </span>
+                            </div>
+                            <div class="validation-message" id="password_validation"></div>
+                        </div>
+                        
+                        <button type="submit" name="register" class="btn-submit">
+                            <i class="fas fa-user-plus"></i> Create Account
+                        </button>
+                    </form>
+                </div>
+            </div>
+            
+            <div class="card-footer">
+                <div class="security-badge">
+                    <i class="fas fa-shield-alt"></i>
+                    <span>256-bit SSL Encrypted</span>
+                    <i class="fas fa-database"></i>
+                    <span>Secure Database</span>
+                </div>
+                <div class="copyright">
+                    <i class="far fa-copyright"></i> <?php echo date('Y'); ?> ExamSphere. All rights reserved.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Tab switching
+        function switchTab(tab) {
+            const buttons = document.querySelectorAll('.tab-btn');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            document.getElementById('login-tab').classList.remove('active');
+            document.getElementById('register-tab').classList.remove('active');
+            
+            if(tab === 'login') {
+                document.getElementById('login-tab').classList.add('active');
+            } else {
+                document.getElementById('register-tab').classList.add('active');
+            }
+        }
+        
+        // Toggle password visibility
+        function togglePassword(inputId, element) {
+            const input = document.getElementById(inputId);
+            const icon = element.querySelector('i');
+            
+            if(input.type === 'password') {
+                input.type = 'text';
+                icon.classList.remove('fa-eye');
+                icon.classList.add('fa-eye-slash');
+            } else {
+                input.type = 'password';
+                icon.classList.remove('fa-eye-slash');
+                icon.classList.add('fa-eye');
+            }
+        }
+        
+        // Live name validation
+        function validateNameLive() {
+            const input = document.getElementById('reg_full_name');
+            const validationDiv = document.getElementById('name_validation');
+            const nameValue = input.value.trim();
+            const nameRegex = /^[a-zA-Z\s]*$/;
+            
+            if (nameValue.length > 0) {
+                if (nameRegex.test(nameValue) && nameValue.length >= 3) {
+                    input.classList.add('success');
+                    input.classList.remove('error');
+                    validationDiv.innerHTML = '<i class="fas fa-check-circle"></i> Valid name';
+                    validationDiv.className = 'validation-message success';
+                } else if (!nameRegex.test(nameValue)) {
+                    input.classList.add('error');
+                    input.classList.remove('success');
+                    validationDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> Only letters and spaces allowed';
+                    validationDiv.className = 'validation-message error';
+                } else if (nameValue.length < 3) {
+                    input.classList.add('error');
+                    input.classList.remove('success');
+                    validationDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> Minimum 3 characters';
+                    validationDiv.className = 'validation-message error';
+                }
+            } else {
+                input.classList.remove('success', 'error');
+                validationDiv.innerHTML = '';
+            }
+        }
+        
+        // Password match validation
+        function validatePasswordMatch() {
+            const password = document.getElementById('reg_password').value;
+            const confirm = document.getElementById('reg_confirm_password').value;
+            const validationDiv = document.getElementById('password_validation');
+            
+            if (confirm.length > 0) {
+                if (password === confirm && password.length >= 6) {
+                    validationDiv.innerHTML = '<i class="fas fa-check-circle"></i> Passwords match';
+                    validationDiv.className = 'validation-message success';
+                    return true;
+                } else if (password !== confirm) {
+                    validationDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> Passwords do not match';
+                    validationDiv.className = 'validation-message error';
+                    return false;
+                } else if (password.length < 6) {
+                    validationDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> Password must be at least 6 characters';
+                    validationDiv.className = 'validation-message error';
+                    return false;
+                }
+            }
+            return true;
+        }
+        
+        // Registration validation
+        function validateRegistration() {
+            const fullName = document.getElementById('reg_full_name').value.trim();
+            const nameRegex = /^[a-zA-Z\s]+$/;
+            
+            if (!nameRegex.test(fullName)) {
+                alert("Full name can only contain letters and spaces!");
+                return false;
+            }
+            
+            if (fullName.length < 3) {
+                alert("Full name must be at least 3 characters!");
+                return false;
+            }
+            
+            const password = document.getElementById('reg_password').value;
+            if (password.length < 6) {
+                alert("Password must be at least 6 characters!");
+                return false;
+            }
+            
+            const confirm = document.getElementById('reg_confirm_password').value;
+            if (password !== confirm) {
+                alert("Passwords do not match!");
+                return false;
+            }
+            
+            const username = document.getElementById('reg_username').value.trim();
+            if (username.length < 3) {
+                alert("Username must be at least 3 characters!");
+                return false;
+            }
+            
+            const email = document.getElementById('reg_email').value.trim();
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                alert("Please enter a valid email address!");
+                return false;
+            }
+            
+            return true;
+        }
+        
+        // Login validation
+        function validateLogin() {
+            const username = document.getElementById('login_username').value.trim();
+            const password = document.getElementById('login_password').value.trim();
+            
+            if (username === '' || password === '') {
+                alert("Please enter both username and password!");
+                return false;
+            }
+            return true;
+        }
+        
+        // Event listeners
+        document.getElementById('reg_confirm_password')?.addEventListener('keyup', validatePasswordMatch);
+        document.getElementById('reg_password')?.addEventListener('keyup', validatePasswordMatch);
+        
+        // Prevent spaces at beginning of name
+        document.getElementById('reg_full_name')?.addEventListener('keyup', function() {
+            if (this.value.startsWith(' ')) {
+                this.value = this.value.trimStart();
+            }
+        });
+    </script>
+</body>
+</html>
