@@ -1,4 +1,7 @@
 <?php
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 require_once 'config/database.php';
 require_once 'config/multi_role.php';
 
@@ -59,38 +62,100 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
     }
 }
 
-// Handle registration
+// ============= REGISTRATION - ONLY ADMIN CAN CREATE ACCOUNTS =============
 if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
     $username = trim($_POST['username']);
-    $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
+    $password = $_POST['password'];
     $full_name = trim($_POST['full_name']);
     $email = trim($_POST['email']);
-    $student_id = trim($_POST['student_id']);
+    $student_id = trim($_POST['student_id'] ?? '');
+    $role = trim($_POST['role'] ?? '');
+    $admin_key = trim($_POST['admin_key'] ?? '');
     
-    if (!preg_match("/^[a-zA-Z\s]+$/", $full_name)) {
+    // Admin verification key
+    $secret_key = 'ADMIN_SECRET_2026';
+    
+    // ========== SECURITY: ONLY ALLOW ADMIN REGISTRATION ==========
+    $allowed_roles = ['admin']; // ONLY ADMIN CAN REGISTER
+    
+    // Check if role is admin
+    if ($role !== 'admin') {
+        $error = "🔒 <strong>Registration is restricted!</strong><br>Only Administrators can create accounts. Please contact the system administrator.";
+    } 
+    // Validate admin key
+    elseif ($admin_key !== $secret_key) {
+        $error = "⚠️ <strong>Invalid Admin Verification Key!</strong><br>Please enter the correct admin key to create an account.";
+    }
+    // Validate full name
+    elseif (!preg_match("/^[a-zA-Z\s]+$/", $full_name)) {
         $error = "Full name can only contain letters and spaces!";
-    } elseif (strlen($full_name) < 3) {
+    } 
+    elseif (strlen($full_name) < 3) {
         $error = "Full name must be at least 3 characters!";
-    } else {
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ? OR email = ?");
-        $stmt->execute([$username, $email]);
-        
-        if($stmt->rowCount() > 0) {
-            $error = "Username or email already exists!";
-        } else {
-            $stmt = $pdo->prepare("
-                INSERT INTO users (username, password, full_name, email, student_id, role, status) 
-                VALUES (?, ?, ?, ?, ?, 'student', 'active')
-            ");
+    } 
+    elseif (strlen($password) < 6) {
+        $error = "Password must be at least 6 characters!";
+    }
+    else {
+        try {
+            // Check if user exists
+            $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ? OR email = ?");
+            $stmt->execute([$username, $email]);
             
-            if($stmt->execute([$username, $password, $full_name, $email, $student_id])) {
-                $user_id = $pdo->lastInsertId();
-                assignRole($pdo, $user_id, 'student', $user_id);
-                $success = "Registration successful! You can now login.";
-                $_POST = array();
+            if($stmt->rowCount() > 0) {
+                $error = "Username or email already exists!";
             } else {
-                $error = "Registration failed. Please try again.";
+                // Hash password
+                $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+                
+                // Check what columns exist in the table
+                $columns = $pdo->query("DESCRIBE users")->fetchAll(PDO::FETCH_COLUMN);
+                
+                // Build insert query dynamically
+                $insertFields = ['username', 'password', 'full_name', 'email', 'role', 'status'];
+                $placeholders = ['?', '?', '?', '?', '?', '?'];
+                $values = [$username, $hashed_password, $full_name, $email, 'admin', 'active'];
+                
+                // Add student_id if column exists
+                if (in_array('student_id', $columns)) {
+                    $insertFields[] = 'student_id';
+                    $placeholders[] = '?';
+                    $values[] = $student_id;
+                }
+                
+                // Add created_at if column exists
+                if (in_array('created_at', $columns)) {
+                    $insertFields[] = 'created_at';
+                    $placeholders[] = 'NOW()';
+                }
+                
+                $sql = "INSERT INTO users (" . implode(', ', $insertFields) . ") 
+                        VALUES (" . implode(', ', $placeholders) . ")";
+                
+                $stmt = $pdo->prepare($sql);
+                
+                if($stmt->execute($values)) {
+                    $user_id = $pdo->lastInsertId();
+                    
+                    // Assign admin role
+                    if (function_exists('assignRole')) {
+                        try {
+                            assignRole($pdo, $user_id, 'admin', $user_id);
+                        } catch (Exception $e) {
+                            // Role assignment failed but user was created
+                            error_log("Role assignment failed: " . $e->getMessage());
+                        }
+                    }
+                    
+                    $success = "✅ <strong>Registration successful!</strong><br>You are registered as: <strong>Administrator</strong><br>Please login to access the admin dashboard.";
+                    $_POST = array();
+                } else {
+                    $error = "Registration failed. Please try again.";
+                }
             }
+        } catch (PDOException $e) {
+            $error = "Database error: " . $e->getMessage();
+            error_log("Registration error: " . $e->getMessage());
         }
     }
 }
@@ -119,7 +184,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             position: relative;
         }
 
-        /* Animated Particles Background */
         .particles {
             position: fixed;
             top: 0;
@@ -144,7 +208,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             75% { transform: translateY(-50px) translateX(-40px) rotate(270deg); opacity: 0.6; }
         }
 
-        /* Gradient Orbs */
         .orb {
             position: fixed;
             border-radius: 50%;
@@ -187,7 +250,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             75% { transform: translate(-50px, 50px); }
         }
 
-        /* Main Container */
         .container {
             position: relative;
             z-index: 1;
@@ -198,7 +260,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             padding: 20px;
         }
 
-        /* Glass Card */
         .glass-card {
             background: rgba(255,255,255,0.03);
             backdrop-filter: blur(20px);
@@ -216,7 +277,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             box-shadow: 0 35px 60px -15px rgba(0,0,0,0.6);
         }
 
-        /* Header Section */
         .card-header {
             background: linear-gradient(135deg, rgba(102,126,234,0.2) 0%, rgba(118,75,162,0.2) 100%);
             padding: 40px 30px;
@@ -255,12 +315,10 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             font-size: 14px;
         }
 
-        /* Body Section */
         .card-body {
             padding: 35px;
         }
 
-        /* Tabs */
         .tabs {
             display: flex;
             gap: 12px;
@@ -295,7 +353,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             color: white;
         }
 
-        /* Tab Content */
         .tab-content {
             display: none;
             animation: fadeInUp 0.4s ease;
@@ -316,7 +373,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             }
         }
 
-        /* Form Groups */
         .form-group {
             margin-bottom: 20px;
         }
@@ -341,9 +397,11 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             transform: translateY(-50%);
             color: rgba(255,255,255,0.5);
             font-size: 16px;
+            z-index: 2;
         }
 
-        .input-wrapper input {
+        .input-wrapper input,
+        .input-wrapper select {
             width: 100%;
             padding: 14px 16px 14px 48px;
             background: rgba(255,255,255,0.08);
@@ -353,9 +411,25 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             color: white;
             font-family: 'Inter', sans-serif;
             transition: all 0.3s ease;
+            appearance: none;
+            -webkit-appearance: none;
         }
 
-        .input-wrapper input:focus {
+        .input-wrapper select {
+            cursor: pointer;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='white' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 16px center;
+            padding-right: 40px;
+        }
+
+        .input-wrapper select option {
+            background: #1a1a2e;
+            color: white;
+        }
+
+        .input-wrapper input:focus,
+        .input-wrapper select:focus {
             outline: none;
             border-color: #667eea;
             background: rgba(255,255,255,0.12);
@@ -374,7 +448,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             border-color: #48bb78;
         }
 
-        /* Validation Messages */
         .validation-message {
             font-size: 11px;
             margin-top: 6px;
@@ -391,7 +464,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             color: #48bb78;
         }
 
-        /* Password Toggle */
         .password-toggle {
             position: absolute;
             right: 16px;
@@ -401,13 +473,13 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             color: rgba(255,255,255,0.5);
             font-size: 16px;
             transition: color 0.3s;
+            z-index: 2;
         }
 
         .password-toggle:hover {
             color: rgba(255,255,255,0.8);
         }
 
-        /* Button */
         .btn-submit {
             width: 100%;
             padding: 14px;
@@ -445,7 +517,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             box-shadow: 0 10px 25px rgba(102,126,234,0.4);
         }
 
-        /* Alerts */
         .alert {
             padding: 14px 16px;
             border-radius: 14px;
@@ -480,7 +551,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             color: #9ae6b4;
         }
 
-        /* Footer */
         .card-footer {
             padding: 20px 35px 35px;
             text-align: center;
@@ -506,24 +576,19 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             margin-top: 15px;
         }
 
-        /* Responsive */
         @media (max-width: 500px) {
             .card-body, .card-footer {
                 padding: 25px;
             }
-            
             .card-header {
                 padding: 30px 25px;
             }
-            
             .card-header h1 {
                 font-size: 24px;
             }
-            
             .tabs {
                 gap: 8px;
             }
-            
             .tab-btn {
                 padding: 10px 15px;
                 font-size: 13px;
@@ -643,6 +708,31 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
                         </div>
                         
                         <div class="form-group">
+                            <label><i class="fas fa-user-tag"></i> Account Type</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon"><i class="fas fa-user-shield"></i></span>
+                                <select name="role" id="reg_role" required>
+                                    <option value="">-- Select Account Type --</option>
+                                    <option value="admin">Administrator</option>
+                                </select>
+                            </div>
+                            <div style="font-size:11px; color:rgba(255,255,255,0.5); margin-top:5px;">
+                                <i class="fas fa-info-circle"></i> Only Administrator accounts can be created
+                            </div>
+                        </div>
+                        
+                        <div class="form-group" id="admin_key_group">
+                            <label><i class="fas fa-key"></i> Admin Verification Key <span style="color:#ff6b6b;">*</span></label>
+                            <div class="input-wrapper">
+                                <span class="input-icon"><i class="fas fa-shield-alt"></i></span>
+                                <input type="password" name="admin_key" id="reg_admin_key" required placeholder="Enter admin verification key">
+                            </div>
+                            <div style="font-size:11px; color:rgba(255,255,255,0.4); margin-top:5px;">
+                                <i class="fas fa-info-circle"></i> Required for Administrator account creation
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
                             <label><i class="fas fa-id-card"></i> Student ID (Optional)</label>
                             <div class="input-wrapper">
                                 <span class="input-icon"><i class="fas fa-qrcode"></i></span>
@@ -676,7 +766,7 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
                         </div>
                         
                         <button type="submit" name="register" class="btn-submit">
-                            <i class="fas fa-user-plus"></i> Create Account
+                            <i class="fas fa-user-plus"></i> Create Administrator Account
                         </button>
                     </form>
                 </div>
@@ -697,7 +787,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
     </div>
 
     <script>
-        // Tab switching
         function switchTab(tab) {
             const buttons = document.querySelectorAll('.tab-btn');
             buttons.forEach(btn => btn.classList.remove('active'));
@@ -713,7 +802,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             }
         }
         
-        // Toggle password visibility
         function togglePassword(inputId, element) {
             const input = document.getElementById(inputId);
             const icon = element.querySelector('i');
@@ -729,7 +817,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             }
         }
         
-        // Live name validation
         function validateNameLive() {
             const input = document.getElementById('reg_full_name');
             const validationDiv = document.getElementById('name_validation');
@@ -759,7 +846,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             }
         }
         
-        // Password match validation
         function validatePasswordMatch() {
             const password = document.getElementById('reg_password').value;
             const confirm = document.getElementById('reg_confirm_password').value;
@@ -783,7 +869,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             return true;
         }
         
-        // Registration validation
         function validateRegistration() {
             const fullName = document.getElementById('reg_full_name').value.trim();
             const nameRegex = /^[a-zA-Z\s]+$/;
@@ -823,10 +908,16 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
                 return false;
             }
             
+            // Validate admin key
+            const adminKey = document.getElementById('reg_admin_key').value.trim();
+            if (adminKey === '') {
+                alert("Please enter the admin verification key!");
+                return false;
+            }
+            
             return true;
         }
         
-        // Login validation
         function validateLogin() {
             const username = document.getElementById('login_username').value.trim();
             const password = document.getElementById('login_password').value.trim();
@@ -838,11 +929,9 @@ if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['register'])) {
             return true;
         }
         
-        // Event listeners
         document.getElementById('reg_confirm_password')?.addEventListener('keyup', validatePasswordMatch);
         document.getElementById('reg_password')?.addEventListener('keyup', validatePasswordMatch);
         
-        // Prevent spaces at beginning of name
         document.getElementById('reg_full_name')?.addEventListener('keyup', function() {
             if (this.value.startsWith(' ')) {
                 this.value = this.value.trimStart();
