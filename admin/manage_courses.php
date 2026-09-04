@@ -174,6 +174,30 @@ if(isset($_GET['remove']) && isset($_GET['course_id'])) {
     logActivity($pdo, $admin_id, 'course_removed', "Removed course ID: $course_id");
 }
 
+// Handle course deletion (NEW)
+if(isset($_GET['delete']) && isset($_GET['course_id'])) {
+    $course_id = (int)$_GET['course_id'];
+    
+    try {
+        // Check if course exists and get course code for logging
+        $stmt = $pdo->prepare("SELECT course_code FROM courses WHERE id = ?");
+        $stmt->execute([$course_id]);
+        $course = $stmt->fetch();
+        
+        if($course) {
+            // Delete the course permanently
+            $stmt = $pdo->prepare("DELETE FROM courses WHERE id = ?");
+            $stmt->execute([$course_id]);
+            $message = "Course '{$course['course_code']}' has been permanently deleted!";
+            logActivity($pdo, $admin_id, 'course_deleted', "Permanently deleted course ID: $course_id");
+        } else {
+            $error = "Course not found!";
+        }
+    } catch(PDOException $e) {
+        $error = "Failed to delete course: " . $e->getMessage();
+    }
+}
+
 // Get all teachers
 $stmt = $pdo->prepare("SELECT id, username, full_name, department FROM users WHERE role = 'teacher' AND status = 'active'");
 $stmt->execute();
@@ -204,9 +228,9 @@ $courses = $stmt->fetchAll();
         .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
         .card { background: white; border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .btn-primary { background: #667eea; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
-        .btn-success { background: #28a745; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
         .btn-danger { background: #dc3545; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; text-decoration: none; display: inline-block; }
-        .btn-info { background: #17a2b8; color: white; padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; }
+        .btn-danger-delete { background: #dc3545; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; text-decoration: none; display: inline-block; }
+        .btn-danger-delete:hover { background: #c82333; }
         table { width: 100%; border-collapse: collapse; }
         th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
         th { background: #f8f9fa; }
@@ -228,6 +252,7 @@ $courses = $stmt->fetchAll();
         .btn-group { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
         .csv-format { background: #f8f9fa; padding: 10px; border-radius: 5px; margin: 10px 0; font-size: 14px; }
         .csv-format code { background: #e9ecef; padding: 2px 5px; border-radius: 3px; }
+        .action-buttons { display: flex; gap: 5px; flex-wrap: wrap; }
     </style>
 </head>
 <body>
@@ -295,9 +320,13 @@ $courses = $stmt->fetchAll();
                                 <td><?php echo $course['semester']; ?></td>
                                 <td><span class="badge badge-<?php echo $course['status']; ?>"><?php echo ucfirst($course['status']); ?></span></td>
                                 <td>
-                                    <?php if($course['teacher_id']): ?>
-                                        <a href="?remove=1&course_id=<?php echo $course['id']; ?>" class="btn-danger" onclick="return confirm('Remove this course?')">Remove</a>
-                                    <?php endif; ?>
+                                    <div class="action-buttons">
+                                        <?php if($course['teacher_id']): ?>
+                                            <a href="?remove=1&course_id=<?php echo $course['id']; ?>" class="btn-danger" onclick="return confirm('Remove this course? (Set to inactive)')">Remove</a>
+                                        <?php endif; ?>
+                                        <!-- NEW: Delete button for all courses -->
+                                        <a href="?delete=1&course_id=<?php echo $course['id']; ?>" class="btn-danger-delete" onclick="return confirm('Permanently delete this course? This action cannot be undone!')">Delete</a>
+                                    </div>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
